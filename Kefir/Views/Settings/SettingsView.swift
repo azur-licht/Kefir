@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftKEF
 import KeyboardShortcuts
 
 struct SettingsView: View {
@@ -51,8 +52,12 @@ struct SpeakersTab: View {
             VStack(spacing: 0) {
                 List(selection: $selectedSpeaker) {
                     ForEach(appState.speakers) { speaker in
-                        SpeakerRow(speaker: speaker, isSelected: selectedSpeaker?.id == speaker.id)
-                            .tag(speaker)
+                        SpeakerRow(
+                            appState: appState,
+                            speaker: speaker,
+                            isSelected: selectedSpeaker?.id == speaker.id
+                        )
+                        .tag(speaker)
                     }
                 }
                 .listStyle(InsetListStyle())
@@ -109,16 +114,29 @@ struct SpeakersTab: View {
 }
 
 struct SpeakerRow: View {
+    @ObservedObject var appState: AppState
     let speaker: SpeakerProfile
     let isSelected: Bool
-    
+
+    /// Two-way binding for the picker. Mapping `nil` (no preference) to/from
+    /// a sentinel string lets us use a single `Picker` for the optional.
+    private var preferredSourceBinding: Binding<String> {
+        Binding(
+            get: { speaker.preferredSourceOnWake?.rawValue ?? "" },
+            set: { newRawValue in
+                let newValue: KEFSource? = newRawValue.isEmpty ? nil : KEFSource(rawValue: newRawValue)
+                Task { await appState.setPreferredSourceOnWake(newValue, for: speaker) }
+            }
+        )
+    }
+
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(speaker.name)
                         .font(.system(size: 13))
-                    
+
                     if speaker.isDefault {
                         Text("DEFAULT")
                             .font(.system(size: 10, weight: .medium))
@@ -129,14 +147,31 @@ struct SpeakerRow: View {
                             .cornerRadius(3)
                     }
                 }
-                
+
                 Text(speaker.host)
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
+
+                HStack(spacing: 4) {
+                    Text("On wake:")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                    Picker("", selection: preferredSourceBinding) {
+                        Text("Keep last source").tag("")
+                        ForEach(SourceManager.availableSources, id: \.self) { source in
+                            Text(SourceManager().displayName(for: source))
+                                .tag(source.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .controlSize(.small)
+                    .fixedSize()
+                }
             }
-            
+
             Spacer()
-            
+
             if speaker.id == speaker.id { // Check if currently connected
                 Circle()
                     .fill(Color.green)

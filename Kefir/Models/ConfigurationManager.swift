@@ -1,4 +1,5 @@
 import Foundation
+import SwiftKEF
 
 // MARK: - Data Models
 
@@ -8,13 +9,57 @@ struct SpeakerProfile: Codable, Identifiable, Hashable {
     let host: String
     let lastSeen: Date
     let isDefault: Bool
-    
-    init(id: UUID = UUID(), name: String, host: String, lastSeen: Date = Date(), isDefault: Bool = false) {
+    /// If set, the app will switch the speaker to this source automatically
+    /// every time the user powers it on from standby. Lets users land on a
+    /// useful default (e.g. "Optical" for a TV setup) instead of whatever
+    /// source the speaker last used. `nil` keeps the speaker's own choice.
+    let preferredSourceOnWake: KEFSource?
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        host: String,
+        lastSeen: Date = Date(),
+        isDefault: Bool = false,
+        preferredSourceOnWake: KEFSource? = nil
+    ) {
         self.id = id
         self.name = name
         self.host = host
         self.lastSeen = lastSeen
         self.isDefault = isDefault
+        self.preferredSourceOnWake = preferredSourceOnWake
+    }
+
+    // Custom Codable so we don't have to require `KEFSource: Codable`
+    // upstream — we just persist the raw string. Older configs that don't
+    // have `preferredSourceOnWake` decode cleanly (the field is optional).
+    private enum CodingKeys: String, CodingKey {
+        case id, name, host, lastSeen, isDefault, preferredSourceOnWake
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        host = try c.decode(String.self, forKey: .host)
+        lastSeen = try c.decode(Date.self, forKey: .lastSeen)
+        isDefault = try c.decode(Bool.self, forKey: .isDefault)
+        if let raw = try c.decodeIfPresent(String.self, forKey: .preferredSourceOnWake) {
+            preferredSourceOnWake = KEFSource(rawValue: raw)
+        } else {
+            preferredSourceOnWake = nil
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(host, forKey: .host)
+        try c.encode(lastSeen, forKey: .lastSeen)
+        try c.encode(isDefault, forKey: .isDefault)
+        try c.encodeIfPresent(preferredSourceOnWake?.rawValue, forKey: .preferredSourceOnWake)
     }
 }
 
@@ -110,7 +155,8 @@ actor ConfigurationManager {
                     name: speaker.name,
                     host: speaker.host,
                     lastSeen: speaker.lastSeen,
-                    isDefault: false
+                    isDefault: false,
+                    preferredSourceOnWake: speaker.preferredSourceOnWake
                 )
             }
         }
@@ -131,16 +177,37 @@ actor ConfigurationManager {
         guard let index = configuration.speakers.firstIndex(where: { $0.id == id }) else {
             throw ConfigurationError.speakerNotFound
         }
-        
+
         let speaker = configuration.speakers[index]
         configuration.speakers[index] = SpeakerProfile(
             id: speaker.id,
             name: name ?? speaker.name,
             host: host ?? speaker.host,
             lastSeen: Date(),
-            isDefault: speaker.isDefault
+            isDefault: speaker.isDefault,
+            preferredSourceOnWake: speaker.preferredSourceOnWake
         )
-        
+
+        try save()
+    }
+
+    /// Sets (or clears, when `source` is `nil`) the source the app should
+    /// switch to right after powering this speaker on from standby.
+    func setPreferredSourceOnWake(id: UUID, source: KEFSource?) throws {
+        guard let index = configuration.speakers.firstIndex(where: { $0.id == id }) else {
+            throw ConfigurationError.speakerNotFound
+        }
+
+        let speaker = configuration.speakers[index]
+        configuration.speakers[index] = SpeakerProfile(
+            id: speaker.id,
+            name: speaker.name,
+            host: speaker.host,
+            lastSeen: speaker.lastSeen,
+            isDefault: speaker.isDefault,
+            preferredSourceOnWake: source
+        )
+
         try save()
     }
     
@@ -159,7 +226,8 @@ actor ConfigurationManager {
                 name: configuration.speakers[0].name,
                 host: configuration.speakers[0].host,
                 lastSeen: configuration.speakers[0].lastSeen,
-                isDefault: true
+                isDefault: true,
+                preferredSourceOnWake: configuration.speakers[0].preferredSourceOnWake
             )
         }
         
@@ -177,27 +245,29 @@ actor ConfigurationManager {
                 name: speaker.name,
                 host: speaker.host,
                 lastSeen: speaker.lastSeen,
-                isDefault: speaker.id == id
+                isDefault: speaker.id == id,
+                preferredSourceOnWake: speaker.preferredSourceOnWake
             )
         }
-        
+
         try save()
     }
-    
+
     func updateLastUsed(speakerId: UUID) throws {
         guard let index = configuration.speakers.firstIndex(where: { $0.id == speakerId }) else {
             throw ConfigurationError.speakerNotFound
         }
-        
+
         let speaker = configuration.speakers[index]
         configuration.speakers[index] = SpeakerProfile(
             id: speaker.id,
             name: speaker.name,
             host: speaker.host,
             lastSeen: Date(),
-            isDefault: speaker.isDefault
+            isDefault: speaker.isDefault,
+            preferredSourceOnWake: speaker.preferredSourceOnWake
         )
-        
+
         try save()
     }
     

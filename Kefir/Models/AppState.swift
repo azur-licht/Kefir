@@ -250,10 +250,35 @@ class AppState: ObservableObject {
                 powerStatus = .standby
             } else {
                 try await connection.powerOn()
+                // If the user has a preferred source for this speaker, switch
+                // to it now so the speaker lands on the user's intended input
+                // (e.g. "Optical" for a TV setup) instead of whatever it
+                // remembered. Failures here are non-fatal — the speaker is
+                // up either way.
+                if let preferred = currentSpeaker?.preferredSourceOnWake {
+                    try? await connection.setSource(preferred)
+                }
                 powerStatus = .powerOn
                 // Re-start polling after power on
                 Task { startPolling() }
             }
+        }
+    }
+
+    /// Updates this speaker's "preferred source on wake" preference and
+    /// refreshes the in-memory list so the UI re-reads the new value.
+    /// Deliberately does NOT call `loadConfiguration()` (which would
+    /// disconnect and reconnect via `selectSpeaker`); a preference change
+    /// shouldn't tear down the live connection.
+    func setPreferredSourceOnWake(_ source: KEFSource?, for profile: SpeakerProfile) async {
+        do {
+            try await config.setPreferredSourceOnWake(id: profile.id, source: source)
+            speakers = await config.getSpeakers()
+            if let updated = speakers.first(where: { $0.id == currentSpeaker?.id }) {
+                currentSpeaker = updated
+            }
+        } catch {
+            self.error.showOperationError(error, operation: "Update Preferred Source")
         }
     }
     
